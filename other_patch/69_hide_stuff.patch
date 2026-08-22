@@ -95,10 +95,9 @@ diff --git a/fs/proc/spoof_version.c b/fs/proc/spoof_version.c
 new file mode 100644
 --- /dev/null
 +++ b/fs/proc/spoof_version.c
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,51 @@
 +/*
-+ * spoof_version.c - /proc/version 伪装（内置版, 延迟执行）
-+ * late_initcall 时 proc 未就绪会失败, 故用 delayed_work 延迟20秒后执行
++ * spoof_version.c - /proc/version 伪装（内置版, 重试机制）
 + */
 +#include <linux/kernel.h>
 +#include <linux/init.h>
@@ -125,11 +124,19 @@ new file mode 100644
 +
 +static void spoof_version_do_work(struct work_struct *w)
 +{
-+	remove_proc_entry("version", NULL);
-+	if (proc_create("version", 0444, NULL, &spoof_version_ops))
-+		pr_info("spoof: version hijacked\n");
-+	else
-+		pr_err("spoof: version proc_create failed\n");
++	int i;
++
++	for (i = 0; i < 6; i++) {
++		remove_proc_entry("version", NULL);
++		if (proc_create("version", 0444, NULL, &spoof_version_ops)) {
++			pr_info("spoof: version hijacked\n");
++			return;
++		}
++		pr_info("spoof: version retry %d\n", i + 1);
++		schedule_delayed_work(&spoof_version_work, msecs_to_jiffies(30000));
++		return;
++	}
++	pr_err("spoof: version give up\n");
 +}
 +
 +static int __init spoof_version_init(void)
@@ -145,10 +152,9 @@ diff --git a/fs/proc/spoof_cpuinfo.c b/fs/proc/spoof_cpuinfo.c
 new file mode 100644
 --- /dev/null
 +++ b/fs/proc/spoof_cpuinfo.c
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,133 @@
 +/*
-+ * spoof_cpuinfo.c - /proc/cpuinfo 伪装（内置版, 延迟执行）
-+ * late_initcall 时 proc 未就绪会失败, 故用 delayed_work 延迟20秒后执行
++ * spoof_cpuinfo.c - /proc/cpuinfo 伪装 (Kirin 9030S 8核真机数据)
 + */
 +#include <linux/kernel.h>
 +#include <linux/init.h>
@@ -159,100 +165,124 @@ new file mode 100644
 +#include <linux/sched.h>
 +
 +static const char fake_cpuinfo[] =
-+"Processor\t: AArch64 Processor rev 0 (aarch64)\n"
-+"processor\t: 0\n"
-+"BogoMIPS\t: 26.00\n"
-+"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
-+"CPU implementer\t: 0x48\n"
++"Processor	: AArch64 Processor rev 0 (aarch64)\n"
++"processor	: 0\n"
++"BogoMIPS	: 26.00\n"
++"Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer	: 0x48\n"
 +"CPU architecture: 8\n"
-+"CPU variant\t: 0x1\n"
-+"CPU part\t: 0xd24\n"
-+"CPU revision\t: 0\n"
++"CPU variant	: 0x2\n"
++"CPU part	: 0xd24\n"
++"CPU revision	: 0\n"
++"CPU physical	: 0\n"
 +"\n"
-+"processor\t: 1\n"
-+"BogoMIPS\t: 26.00\n"
-+"CPU implementer\t: 0x48\n"
++"processor	: 1\n"
++"BogoMIPS	: 26.00\n"
++"Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer	: 0x48\n"
 +"CPU architecture: 8\n"
-+"CPU variant\t: 0x2\n"
-+"CPU part\t: 0xd47\n"
-+"CPU revision\t: 0\n"
++"CPU variant	: 0x2\n"
++"CPU part	: 0xd24\n"
++"CPU revision	: 0\n"
++"CPU physical	: 1\n"
 +"\n"
-+"processor\t: 2\n"
-+"BogoMIPS\t: 26.00\n"
-+"CPU implementer\t: 0x48\n"
++"processor	: 2\n"
++"BogoMIPS	: 26.00\n"
++"Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer	: 0x48\n"
 +"CPU architecture: 8\n"
-+"CPU variant\t: 0x2\n"
-+"CPU part\t: 0xd47\n"
-+"CPU revision\t: 0\n"
++"CPU variant	: 0x2\n"
++"CPU part	: 0xd24\n"
++"CPU revision	: 0\n"
++"CPU physical	: 2\n"
 +"\n"
-+"processor\t: 3\n"
-+"BogoMIPS\t: 26.00\n"
-+"CPU implementer\t: 0x48\n"
++"processor	: 3\n"
++"BogoMIPS	: 26.00\n"
++"Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer	: 0x48\n"
 +"CPU architecture: 8\n"
-+"CPU variant\t: 0x2\n"
-+"CPU part\t: 0xd47\n"
-+"CPU revision\t: 0\n"
++"CPU variant	: 0x2\n"
++"CPU part	: 0xd24\n"
++"CPU revision	: 0\n"
++"CPU physical	: 3\n"
 +"\n"
-+"processor\t: 4\n"
-+"BogoMIPS\t: 26.00\n"
-+"CPU implementer\t: 0x48\n"
++"processor	: 4\n"
++"BogoMIPS	: 26.00\n"
++"Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer	: 0x48\n"
 +"CPU architecture: 8\n"
-+"CPU variant\t: 0x3\n"
-+"CPU part\t: 0xd06\n"
-+"CPU revision\t: 0\n"
++"CPU variant	: 0x2\n"
++"CPU part	: 0xd47\n"
++"CPU revision	: 0\n"
++"CPU physical	: 4\n"
 +"\n"
-+"processor\t: 5\n"
-+"BogoMIPS\t: 26.00\n"
-+"CPU implementer\t: 0x48\n"
++"processor	: 5\n"
++"BogoMIPS	: 26.00\n"
++"Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer	: 0x48\n"
 +"CPU architecture: 8\n"
-+"CPU variant\t: 0x3\n"
-+"CPU part\t: 0xd06\n"
-+"CPU revision\t: 0\n"
++"CPU variant	: 0x2\n"
++"CPU part	: 0xd47\n"
++"CPU revision	: 0\n"
++"CPU physical	: 5\n"
 +"\n"
-+"processor\t: 6\n"
-+"BogoMIPS\t: 26.00\n"
-+"CPU implementer\t: 0x48\n"
++"processor	: 6\n"
++"BogoMIPS	: 26.00\n"
++"Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer	: 0x48\n"
 +"CPU architecture: 8\n"
-+"CPU variant\t: 0x3\n"
-+"CPU part\t: 0xd06\n"
-+"CPU revision\t: 0\n"
++"CPU variant	: 0x2\n"
++"CPU part	: 0xd47\n"
++"CPU revision	: 0\n"
++"CPU physical	: 6\n"
 +"\n"
-+"processor\t: 7\n"
-+"BogoMIPS\t: 26.00\n"
-+"CPU implementer\t: 0x48\n"
++"processor	: 7\n"
++"BogoMIPS	: 26.00\n"
++"Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer	: 0x48\n"
 +"CPU architecture: 8\n"
-+"CPU variant\t: 0x2\n"
-+"CPU part\t: 0xd47\n"
-+"CPU revision\t: 0\n"
++"CPU variant	: 0x2\n"
++"CPU part	: 0xd06\n"
++"CPU revision	: 0\n"
++"CPU physical	: 7\n"
 +"\n"
-+"Hardware\t: HiSilicon Kirin 9030 Pro\n";
++"Hardware	: HUAWEI Kirin9030S\n"
++;
 +
 +static ssize_t spoof_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 +{
-+	return simple_read_from_buffer(buf, count, ppos, fake_cpuinfo, sizeof(fake_cpuinfo) - 1);
++\treturn simple_read_from_buffer(buf, count, ppos, fake_cpuinfo, sizeof(fake_cpuinfo) - 1);
 +}
 +
 +static const struct proc_ops spoof_proc_ops = {
-+	.proc_read = spoof_read,
-+	.proc_lseek = default_llseek,
++\t.proc_read = spoof_read,
++\t.proc_lseek = default_llseek,
 +};
 +
 +static struct delayed_work spoof_cpuinfo_work;
 +
 +static void spoof_cpuinfo_do_work(struct work_struct *w)
 +{
-+	remove_proc_entry("cpuinfo", NULL);
-+	if (proc_create("cpuinfo", 0444, NULL, &spoof_proc_ops))
-+		pr_info("spoof: cpuinfo hijacked\n");
-+	else
-+		pr_err("spoof: cpuinfo proc_create failed\n");
++\tint i;
++
++\tfor (i = 0; i < 6; i++) {
++\t\tremove_proc_entry("cpuinfo", NULL);
++\t\tif (proc_create("cpuinfo", 0444, NULL, &spoof_proc_ops)) {
++\t\t\tpr_info("spoof: cpuinfo hijacked\n");
++\t\t\treturn;
++\t\t}
++\t\tpr_info("spoof: cpuinfo retry %d\n", i + 1);
++\t\tschedule_delayed_work(&spoof_cpuinfo_work, msecs_to_jiffies(30000));
++\t\treturn;
++\t}
++\tpr_err("spoof: cpuinfo give up\n");
 +}
 +
 +static int __init spoof_cpuinfo_init(void)
 +{
-+	INIT_DELAYED_WORK(&spoof_cpuinfo_work, spoof_cpuinfo_do_work);
-+	schedule_delayed_work(&spoof_cpuinfo_work, msecs_to_jiffies(20000));
-+	return 0;
++\tINIT_DELAYED_WORK(&spoof_cpuinfo_work, spoof_cpuinfo_do_work);
++\tschedule_delayed_work(&spoof_cpuinfo_work, msecs_to_jiffies(20000));
++\treturn 0;
 +}
 +
 +late_initcall(spoof_cpuinfo_init);
