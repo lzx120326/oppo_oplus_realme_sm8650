@@ -1,0 +1,276 @@
+--- a/fs/proc/task_mmu.c	2024-12-17 11:21:16.646581300 -0500
++++ b/fs/proc/task_mmu.c	2024-12-17 11:35:36.873887048 -0500
+@@ -416,6 +416,23 @@
+ extern void susfs_sus_ino_for_show_map_vma(unsigned long ino, dev_t *out_dev, unsigned long *out_ino);
+ #endif
+ 
++static void show_vma_header_prefix_fake(struct seq_file *m,
++					unsigned long start, unsigned long end,
++					vm_flags_t flags, unsigned long long pgoff,
++					dev_t dev, unsigned long ino)
++{
++	seq_setwidth(m, 25 + sizeof(void *) * 6 - 1);
++	seq_printf(m, "%08lx-%08lx %c%c%c%c %08llx %02x:%02x %lu ",
++			start,
++			end,
++			flags & VM_READ ? 'r' : '-',
++			flags & VM_WRITE ? 'w' : '-',
++			flags & VM_EXEC ? '-' : '-',
++			flags & VM_MAYSHARE ? 's' : 'p',
++			pgoff,
++			MAJOR(dev), MINOR(dev), ino);
++}
++
+ static void
+ show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
+ {
+@@ -427,6 +444,7 @@
+ 	unsigned long start, end;
+ 	dev_t dev = 0;
+ 	const char *name = NULL;
++	struct dentry *dentry;
+ 
+ 	if (file) {
+ 		struct inode *inode = file_inode(vma->vm_file);
+@@ -442,6 +460,23 @@
+ bypass_orig_flow:
+ #endif
+ 		pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
++		dentry = file->f_path.dentry;
++        if (dentry) {
++        	const char *path = (const char *)dentry->d_name.name; 
++            if (strstr(path, "lineage")) {
++			start = vma->vm_start;
++			end = vma->vm_end;
++			show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino);
++			name = "/system/framework/framework-res.apk";
++			goto done;
++            }
++			if (strstr(path, "jit-zygote-cache")) { 
++			start = vma->vm_start;
++			end = vma->vm_end;
++			show_vma_header_prefix_fake(m, start, end, flags, pgoff, dev, ino);
++			goto bypass;
++            }
++        }
+ 	}
+ 
+ 	start = vma->vm_start;
+@@ -449,6 +484,7 @@
+ 	if (show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino))
+ 		return;
+ 
++	bypass:
+ 	/*
+ 	 * Print the dentry name for named mappings, and a
+ 	 * special [heap] marker for the heap:
+--- a/fs/proc/base.c	2024-12-15 11:30:00.213422100 -0500
++++ b/fs/proc/base.c	2024-12-15 11:36:21.422813925 -0500
+@@ -2229,11 +2229,17 @@
+ 
+ 	rc = -ENOENT;
+ 	vma = find_exact_vma(mm, vm_start, vm_end);
+-	if (vma && vma->vm_file) {
+-		*path = vma->vm_file->f_path;
+-		path_get(path);
+-		rc = 0;
+-	}
++	if (vma) {
++        if (vma->vm_file) {
++            if (strstr(vma->vm_file->f_path.dentry->d_name.name, "lineage")) { 
++				rc = kern_path("/system/framework/framework-res.apk", LOOKUP_FOLLOW, path);
++			} else {
++				*path = vma->vm_file->f_path;
++				path_get(path);
++				rc = 0;
++            }
++        }
++    }
+ 	mmap_read_unlock(mm);
+ 
+ out_mmput:
+ 
+
+diff --git a/fs/proc/spoof_version.c b/fs/proc/spoof_version.c
+new file mode 100644
+--- /dev/null
++++ b/fs/proc/spoof_version.c
+@@ -0,0 +1,39 @@
++/*
++ * spoof_version.c - /proc/version 伪装（内置版）
++ * 目的: 隐藏"内核被KSU/SUSFS/自定义修改"的痕迹, 伪装成与真机一致的原版内核字符串
++ * 安全: 纯静态数据替换, 无内存操作, proc 标准接口
++ * 注意: 建议按你手机刷ABK前记录的"原版 /proc/version"修改下面的字符串, 与真机一致最无痕
++ */
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/proc_fs.h>
++#include <linux/fs.h>
++#include <linux/uaccess.h>
++
++static const char fake_version[] =
++"Linux version 6.1.141-android14-11-o-g16e6ef702577 (build@kvm-slave) (clang version 17.0.2) #1 SMP PREEMPT Tue Apr 14 16:00:22 CST 2026\n";
++
++static ssize_t spoof_version_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
++{
++    return simple_read_from_buffer(buf, count, ppos, fake_version, sizeof(fake_version) - 1);
++}
++
++static const struct proc_ops spoof_version_ops = {
++    .proc_read = spoof_version_read,
++    .proc_lseek = default_llseek,
++};
++
++static int __init spoof_version_init(void)
++{
++    remove_proc_entry("version", NULL);
++
++    if (!proc_create("version", 0444, NULL, &spoof_version_ops)) {
++        pr_err("spoof: version proc_create failed\n");
++        return -ENOMEM;
++    }
++
++    pr_info("spoof: /proc/version hijacked (builtin)\n");
++    return 0;
++}
++
++late_initcall(spoof_version_init);
+
+diff --git a/fs/proc/spoof_cpuinfo.c b/fs/proc/spoof_cpuinfo.c
+new file mode 100644
+--- /dev/null
++++ b/fs/proc/spoof_cpuinfo.c
+@@ -0,0 +1,121 @@
++/*
++ * cpuinfo_spoof.c - 最无痕 CPU 伪装内核模块 v2
++ * 方案: remove_proc_entry + proc_create 覆盖 /proc/cpuinfo
++ *       只用内核导出API(remove_proc_entry/proc_create/simple_read_from_buffer)
++ *       兼容 Android GKI 6.1 (proc_ops接口)
++ * 无痕: 不碰文件系统层, 无mounts记录, SELinux context原生proc
++ * 加载: insmod cpuinfo_spoof.ko
++ * 卸载: rmmod cpuinfo_spoof (cpuinfo恢复需重启)
++ */
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/proc_fs.h>
++#include <linux/fs.h>
++#include <linux/uaccess.h>
++
++/* ============ 麒麟9030Pro 8核伪装数据 ============ */
++static const char fake_cpuinfo[] =
++"Processor\t: AArch64 Processor rev 0 (aarch64)\n"
++"processor\t: 0\n"
++"BogoMIPS\t: 26.00\n"
++"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer\t: 0x48\n"
++"CPU architecture: 8\n"
++"CPU variant\t: 0x1\n"
++"CPU part\t: 0xd24\n"
++"CPU revision\t: 0\n"
++"\n"
++"processor\t: 1\n"
++"BogoMIPS\t: 26.00\n"
++"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer\t: 0x48\n"
++"CPU architecture: 8\n"
++"CPU variant\t: 0x2\n"
++"CPU part\t: 0xd47\n"
++"CPU revision\t: 0\n"
++"\n"
++"processor\t: 2\n"
++"BogoMIPS\t: 26.00\n"
++"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer\t: 0x48\n"
++"CPU architecture: 8\n"
++"CPU variant\t: 0x2\n"
++"CPU part\t: 0xd47\n"
++"CPU revision\t: 0\n"
++"\n"
++"processor\t: 3\n"
++"BogoMIPS\t: 26.00\n"
++"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer\t: 0x48\n"
++"CPU architecture: 8\n"
++"CPU variant\t: 0x2\n"
++"CPU part\t: 0xd47\n"
++"CPU revision\t: 0\n"
++"\n"
++"processor\t: 4\n"
++"BogoMIPS\t: 26.00\n"
++"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer\t: 0x48\n"
++"CPU architecture: 8\n"
++"CPU variant\t: 0x2\n"
++"CPU part\t: 0xd47\n"
++"CPU revision\t: 0\n"
++"\n"
++"processor\t: 5\n"
++"BogoMIPS\t: 26.00\n"
++"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer\t: 0x48\n"
++"CPU architecture: 8\n"
++"CPU variant\t: 0x3\n"
++"CPU part\t: 0xd06\n"
++"CPU revision\t: 0\n"
++"\n"
++"processor\t: 6\n"
++"BogoMIPS\t: 26.00\n"
++"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer\t: 0x48\n"
++"CPU architecture: 8\n"
++"CPU variant\t: 0x3\n"
++"CPU part\t: 0xd06\n"
++"CPU revision\t: 0\n"
++"\n"
++"processor\t: 7\n"
++"BogoMIPS\t: 26.00\n"
++"Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm ssbs sb paca pacg dcpodp flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti\n"
++"CPU implementer\t: 0x48\n"
++"CPU architecture: 8\n"
++"CPU variant\t: 0x3\n"
++"CPU part\t: 0xd06\n"
++"CPU revision\t: 0\n"
++"\n"
++"Hardware\t: HiSilicon Kirin 9030 Pro\n";
++
++static ssize_t fake_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
++{
++    return simple_read_from_buffer(buf, count, ppos, fake_cpuinfo, sizeof(fake_cpuinfo) - 1);
++}
++
++static const struct proc_ops fake_proc_ops = {
++    .proc_read = fake_read,
++    .proc_lseek = default_llseek,
++};
++
++static int __init spoof_cpuinfo_init(void)
++{
++    /* 移除原 /proc/cpuinfo */
++    remove_proc_entry("cpuinfo", NULL);
++
++    /* 创建伪装节点 */
++    if (!proc_create("cpuinfo", 0444, NULL, &fake_proc_ops)) {
++        pr_err("spoof: cpuinfo proc_create failed\n");
++        return -ENOMEM;
++    }
++
++    pr_info("spoof: cpuinfo hijacked (builtin)\n");
++    return 0;
++}
++
++/* builtin: 无 exit（重启恢复原样） */
++
++late_initcall(spoof_cpuinfo_init);
+
+diff --git a/fs/proc/Makefile b/fs/proc/Makefile
+--- a/fs/proc/Makefile
++++ b/fs/proc/Makefile
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: GPL-2.0
+ #
+ # Makefile for the Linux proc filesystem routines.
+ #
+ 
++obj-y   += spoof_cpuinfo.o spoof_version.o
+ obj-y   += proc.o
