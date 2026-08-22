@@ -301,10 +301,6 @@ jobs:
             cd ./common
             patch -p1 < 50_add_susfs_in_gki-${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}.patch || true
             patch -p1 -N -F 3 < 69_hide_stuff.patch || true
-            # 无痕伪装: 确保obj-y编译行存在(Makefile补丁可能因SUSFS冲突失败,强制追加)
-            grep -q spoof_cpuinfo fs/proc/Makefile || echo "obj-y += spoof_cpuinfo.o spoof_version.o" >> fs/proc/Makefile
-            grep spoof_cpuinfo fs/proc/Makefile
-            ls -la fs/proc/spoof_*.c
             cd ..
           else
             echo "已选择无内置KernelSU模式，跳过susfs配置..."
