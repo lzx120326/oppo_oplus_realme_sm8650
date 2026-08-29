@@ -226,7 +226,7 @@
 -		utsname()->sysname,
 -		utsname()->release,
 -		utsname()->version);
-+	seq_puts(m, "Linux version 6.1.141-android14-11-o-g16e6ef702577 (build@kvm-slave) (clang version 17.0.2) #1 SMP PREEMPT Tue Apr 14 16:00:22 CST 2026\n");
++	seq_puts(m, "Linux version 6.1.118-android14-11-o-gca13bffobf09 (build@kvm-slave) (clang version 17.0.2) #1 SMP PREEMPT Tue Apr 14 16:00:22 CST 2026\n");
  	return 0;
  }
  
